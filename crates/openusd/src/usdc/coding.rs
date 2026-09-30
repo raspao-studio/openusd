@@ -20,7 +20,8 @@ pub fn encoded_buffer_size<T: PrimInt>(count: usize) -> usize {
     } else {
         let sz = mem::size_of::<T>();
         // Saturating: a count from a damaged file must not overflow here.
-        sz.saturating_add(count.saturating_mul(2).div_ceil(8)).saturating_add(sz.saturating_mul(count))
+        sz.saturating_add(count.saturating_mul(2).div_ceil(8))
+            .saturating_add(sz.saturating_mul(count))
     }
 }
 

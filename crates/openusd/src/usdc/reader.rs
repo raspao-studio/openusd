@@ -34,6 +34,10 @@ macro_rules! corrupt {
     };
 }
 
+/// Largest single LZ4-decompressed block the reader allocates (4 GiB).
+/// (Saturates on 32-bit targets.)
+const MAX_DECOMPRESSED_BYTES: usize = if usize::BITS > 32 { 4 << 30 } else { usize::MAX };
+
 // Maximum supported USDC crate version.
 // See USD Core Specification v1.0.1 §16.3.8.2 for version history:
 //   0.10.0 — Path Expression value types
@@ -287,7 +291,7 @@ impl<R: io::Read + io::Seek> CrateFile<R> {
         let file_ver = self.version();
 
         self.fields = if file_ver < version(0, 4, 0) {
-            return Err(ReadError::unsupported("Support FIELDS reader before < 0.4.0"))
+            return Err(ReadError::unsupported("Support FIELDS reader before < 0.4.0"));
         } else {
             let field_count = self.reader.read_count()?;
 
@@ -605,7 +609,14 @@ impl<R: io::Read + io::Seek> CrateFile<R> {
 
         // Decompress to a buffer no larger than LZ4 can expand this input
         // (`estimated_count` is an upper bound from the file, not a size).
-        let most = compressed_size.saturating_mul(255).saturating_add(64) / mem::size_of::<T>().max(1);
+        // A single decoded value over MAX_DECOMPRESSED_BYTES is refused like
+        // the other suspiciously large counts: LZ4 alone would allow 255x a
+        // compressed block that may be most of the file.
+        let most = compressed_size
+            .saturating_mul(255)
+            .saturating_add(64)
+            .min(MAX_DECOMPRESSED_BYTES)
+            / mem::size_of::<T>().max(1);
         let mut output = vec![T::default(); estimated_count.min(most)];
         let actual_size = decompress_lz4(&input, cast_slice_mut(&mut output))?;
 
@@ -1579,7 +1590,7 @@ fn decompress_lz4(mut input: &[u8], output: &mut [u8]) -> Result<usize, ReadErro
         // Decompress chunk by chunk.
         // See https://github.com/PixarAnimationStudios/OpenUSD/blob/0b18ad3f840c24eb25e16b795a5b0821cf05126e/pxr/base/tf/fastCompression.cpp#L125
 
-        return Err(ReadError::unsupported("Support lz4 chunked decompression"))
+        Err(ReadError::unsupported("Support lz4 chunked decompression"))
     }
 }
 
@@ -1625,7 +1636,10 @@ impl<R: io::Read> ReadExt for R {
         let mut raw = Vec::new();
         io::Read::read_to_end(&mut io::Read::take(&mut *self, bytes as u64), &mut raw).ctx("vec")?;
         if raw.len() != bytes {
-            return Err(ReadError::corrupt(format!("vec: {} of {bytes} bytes before the end", raw.len())));
+            return Err(ReadError::corrupt(format!(
+                "vec: {} of {bytes} bytes before the end",
+                raw.len()
+            )));
         }
         let mut vec = vec![T::default(); count];
         cast_slice_mut(&mut vec).copy_from_slice(&raw);
